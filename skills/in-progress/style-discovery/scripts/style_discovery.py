@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Paired corpus discovery for writing-style differences.
+"""Paired and descriptive corpus discovery for writing-style differences.
 
 The engine finds candidate stylistic patterns. It does not decide that a pattern is
 "good", "bad", "AI", or a durable style rule. Those interpretations require review
@@ -28,6 +28,27 @@ DUTCH_FUNCTION_WORDS = {
 }
 TOKEN_RE = re.compile(r"[\wÀ-ÖØ-öø-ÿ]+(?:['’][\wÀ-ÖØ-öø-ÿ]+)?", re.UNICODE)
 SPACE_RE = re.compile(r"\s+")
+SENTENCE_RE = re.compile(
+    r"(?:[^.!?]|\.(?=\d))+(?:[.!?]+(?=\s|$)|$)", re.UNICODE
+)
+
+_CONSTRUCT_PATTERNS = {
+    "condition_fronted": re.compile(
+        r"^\s*(?:indien|mocht|lukt\b[^,]{0,100}|bent\s+u\s+akkoord)"
+        r"\b[^.!?]{0,220},\s*(?:dan\s+)?\S",
+        re.IGNORECASE,
+    ),
+    "purpose_zodat": re.compile(r"\bzodat\b", re.IGNORECASE),
+    "paired_en_dash_aside": re.compile(r"–[^.!?–\n]{1,160}–"),
+    "semicolon_link": re.compile(r";"),
+    "negative_contrast": re.compile(
+        r"(?:niet\s+[^.!?,\n]{1,120},\s*maar\s+[^.!?]{1,160}|"
+        r"geen\s+[^.!?,\n]{1,120},\s*maar\s+[^.!?]{1,160}|"
+        r"niet\s+zozeer\s+[^.!?]{1,120}\s+als\s+wel\s+[^.!?]{1,160})",
+        re.IGNORECASE,
+    ),
+}
+NEGATION_START_RE = re.compile(r"^(?:niet|geen)\b", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -41,6 +62,7 @@ class Pair:
 class TextRecord:
     text_id: str
     text: str
+    provenance: Mapping[str, Any] | None = None
 
 
 @dataclass
@@ -55,7 +77,7 @@ def load_nlp(model: str):
     except ImportError as exc:
         raise RuntimeError(
             "spaCy is required for POS/dependency features. Install spaCy and a Dutch model, "
-            "or use --no-syntax for a lexical-only run."
+            "or use --no-syntax for a lexical/construct-only run."
         ) from exc
     try:
         return spacy.load(model, disable=["ner"])
@@ -108,7 +130,13 @@ def load_texts(path: Path, text_field: str, id_field: str) -> list[TextRecord]:
         if not text:
             continue
         text_id = str(record.get(id_field) or f"text-{i + 1:04d}")
-        texts.append(TextRecord(text_id=text_id, text=text))
+        raw_provenance = record.get("provenance")
+        if raw_provenance is not None and not isinstance(raw_provenance, Mapping):
+            raise ValueError(f"Record {i} provenance must be an object")
+        provenance = (
+            dict(raw_provenance) if isinstance(raw_provenance, Mapping) else None
+        )
+        texts.append(TextRecord(text_id=text_id, text=text, provenance=provenance))
     if not texts:
         raise ValueError("No complete text records found")
     return texts
@@ -124,6 +152,15 @@ def normalize_text(text: str) -> str:
 
 def simple_tokens(text: str) -> list[str]:
     return [m.group(0).casefold() for m in TOKEN_RE.finditer(text)]
+
+
+def sentence_segments(text: str) -> list[str]:
+    segments = [
+        match.group(0).strip()
+        for match in SENTENCE_RE.finditer(text)
+        if match.group(0).strip()
+    ]
+    return segments or ([surface_text(text)] if surface_text(text) else [])
 
 
 def ngrams(items: Sequence[str], n: int) -> Iterable[tuple[str, ...]]:
@@ -175,11 +212,33 @@ def add_fallback_function_words(counts: dict[str, Counter[str]], raw_tokens: Seq
                 counts[family][" ".join(window)] += 1
 
 
+def add_construct_features(counts: dict[str, Counter[str]], text: str) -> None:
+    """Extract sentence/regex constructions without POS or dependency parsing."""
+    sentences = sentence_segments(text)
+    for sentence in sentences:
+        for feature, pattern in _CONSTRUCT_PATTERNS.items():
+            hits = len(pattern.findall(sentence))
+            if hits:
+                counts["construct"][feature] += hits
+
+    negative_listing_count = 0
+    for first, second, third in zip(sentences, sentences[1:], sentences[2:]):
+        if (
+            NEGATION_START_RE.search(first)
+            and NEGATION_START_RE.search(second)
+            and not NEGATION_START_RE.search(third)
+        ):
+            negative_listing_count += 1
+    if negative_listing_count:
+        counts["construct"]["negative_listing"] += negative_listing_count
+
+
 def extract(text: str, nlp: Any | None, include_syntax: bool = True) -> Extracted:
     counts: dict[str, Counter[str]] = defaultdict(Counter)
     normalized = surface_text(text)
     raw_tokens = simple_tokens(text)
     add_fallback_function_words(counts, raw_tokens)
+    add_construct_features(counts, text)
 
     for n in (3, 4, 5):
         family = f"char_{n}gram"
@@ -371,6 +430,24 @@ def descriptive_metric_summary(extracted: Sequence[Extracted]) -> dict[str, Any]
     return result
 
 
+def provenance_summary(records: Sequence[TextRecord]) -> dict[str, Any]:
+    with_provenance = [record for record in records if record.provenance]
+    authorship_statuses = Counter(
+        str(record.provenance.get("authorship_status", "UNSPECIFIED"))
+        for record in with_provenance
+    )
+    source_kinds = Counter(
+        str(record.provenance.get("source_kind", "UNSPECIFIED"))
+        for record in with_provenance
+    )
+    return {
+        "records_with_provenance": len(with_provenance),
+        "records_without_provenance": len(records) - len(with_provenance),
+        "authorship_statuses": dict(sorted(authorship_statuses.items())),
+        "source_kinds": dict(sorted(source_kinds.items())),
+    }
+
+
 def build_descriptive_profile(
     records: Sequence[TextRecord],
     extracted: Sequence[Extracted],
@@ -389,7 +466,9 @@ def build_descriptive_profile(
         for feature, count in corpus.items():
             if count < min_count:
                 continue
-            documents = sum(1 for e in extracted if e.counts.get(family, Counter())[feature] > 0)
+            documents = sum(
+                1 for e in extracted if e.counts.get(family, Counter())[feature] > 0
+            )
             rows.append(
                 {
                     "family": family,
@@ -409,6 +488,7 @@ def build_descriptive_profile(
             "tokens": sum(len(simple_tokens(record.text)) for record in records),
             "characters": sum(len(surface_text(record.text)) for record in records),
         },
+        "provenance": provenance_summary(records),
         "structural_metrics": descriptive_metric_summary(extracted),
         "filters": {"min_count": min_count},
         "features": sorted(rows, key=lambda r: (r["count"], r["document_dispersion"]), reverse=True),
@@ -567,6 +647,14 @@ def render_descriptive_markdown(
         f"Texts: **{payload['record_count']}**; tokens: **{payload['corpus_stats']['tokens']}**.",
         "",
         "No reference corpus is used here. Log Ratio and G² are therefore not computed; this report describes the candidate corpus only.",
+        "",
+        "Construct features use sentence boundaries and regular expressions and remain available without a syntax model.",
+        "",
+        (
+            "Provenance: "
+            f"{payload.get('provenance', {}).get('records_with_provenance', 0)} records carry metadata; "
+            f"authorship statuses: {payload.get('provenance', {}).get('authorship_statuses', {})}."
+        ),
         "",
         "## Structural metrics",
         "",

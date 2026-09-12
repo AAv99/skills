@@ -32,6 +32,15 @@ class StyleDiscoveryTests(unittest.TestCase):
         self.assertIn("Dit", result.counts["char_3gram"])
         self.assertEqual(result.metrics, {})
 
+    def test_construct_extraction_runs_without_nlp_and_captures_negation(self):
+        result = module.extract(
+            "Het probleem is niet de inhoud, maar de vorm. Indien nodig, dan nemen wij contact op.",
+            None,
+            include_syntax=False,
+        )
+        self.assertEqual(result.counts["construct"]["negative_contrast"], 1)
+        self.assertEqual(result.counts["construct"]["condition_fronted"], 1)
+
     def test_load_unpaired_records_preserves_text_and_skips_empty_records(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "texts.json"
@@ -49,6 +58,35 @@ class StyleDiscoveryTests(unittest.TestCase):
             self.assertEqual(len(records), 1)
             self.assertEqual(records[0].text_id, "one")
             self.assertEqual(records[0].text, "Casing, punctuation!")
+
+    def test_load_unpaired_records_retains_provenance_status(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "texts.json"
+            path.write_text(
+                json.dumps(
+                    [
+                        {
+                            "id": "one",
+                            "text": "Casing, punctuation!",
+                            "provenance": {
+                                "authorship_status": "VERIFIED_USER_AUTHORED",
+                                "source_kind": "curated_examples",
+                            },
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            records = module.load_texts(path, "text", "id")
+            self.assertEqual(records[0].provenance["authorship_status"], "VERIFIED_USER_AUTHORED")
+
+            extracted = [module.extract(record.text, None, include_syntax=False) for record in records]
+            payload = module.build_descriptive_profile(records, extracted, "", min_count=1)
+            self.assertEqual(payload["provenance"]["records_with_provenance"], 1)
+            self.assertEqual(
+                payload["provenance"]["authorship_statuses"]["VERIFIED_USER_AUTHORED"],
+                1,
+            )
 
     def test_descriptive_profile_has_no_reference_statistics(self):
         records = [

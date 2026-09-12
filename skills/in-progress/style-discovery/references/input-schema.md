@@ -22,6 +22,21 @@ The input records for descriptive mode contain one text per object:
 {"id":"mail-001","text":"One complete text..."}
 ```
 
+An optional `provenance` object is carried through extraction. It is metadata,
+not text normalization, and is summarized in descriptive output without
+including the source text:
+
+```json
+{
+  "id":"mail-001",
+  "text":"One complete text...",
+  "provenance": {
+    "authorship_status":"VERIFIED_USER_AUTHORED",
+    "source_kind":"curated_examples"
+  }
+}
+```
+
 The loader does not normalize the stored input. It trims only outer transport
 whitespace; the derived feature extraction keeps punctuation and casing in
 character n-grams and keeps morphology in the surface text.
@@ -80,5 +95,10 @@ For a lexical smoke test without spaCy:
 python skills/in-progress/style-discovery/scripts/style_discovery.py \
   /private/pairs.jsonl --no-syntax
 ```
+
+`--no-syntax` still extracts the sentence/regex `construct` family. It only
+omits POS and dependency features. A Dutch sentencizer is sufficient for a
+sentence-aware adapter; the bundled fallback uses transparent regex sentence
+boundaries and therefore does not require spaCy.
 
 For the full Dutch syntax layer, install spaCy plus a Dutch pipeline and select it with `--spacy-model` when it is not named `nl_core_news_sm`.

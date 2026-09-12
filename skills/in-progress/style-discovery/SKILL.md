@@ -1,6 +1,6 @@
 ---
 name: style-discovery
-description: Discover empirical writing-style differences from paired drafts and final texts using function words, character n-grams, POS n-grams, dependency structure, Log Ratio, log-likelihood, dispersion, and concordances. Use when hand-built style rules or AI-tell lists should be tested or expanded from actual writing data.
+description: Discover empirical writing-style differences from paired drafts and final texts using function words, character n-grams, regex-based constructions, POS n-grams, dependency structure, Log Ratio, log-likelihood, dispersion, and concordances. Use when hand-built style rules or AI-tell lists should be tested or expanded from actual writing data.
 ---
 
 # Discover style from paired writing
@@ -12,7 +12,8 @@ Use this skill to find candidate style patterns. Do not use it as a generic qual
 When only one candidate corpus is available, run the script with
 `--mode descriptive`. This mode is a descriptive profile, not a keyness test:
 it reports feature counts, relative frequencies, document dispersion, and
-syntax metrics when available. Relative frequencies are within feature family.
+regex-based sentence/construction features, and syntax metrics when available.
+Relative frequencies are within feature family.
 It deliberately emits no Log Ratio or G².
 
 Do not call the single-corpus output a comparison, reference result, or
@@ -41,8 +42,15 @@ The script extracts these feature families:
 
 - function-word unigrams and short sequences;
 - character 3-, 4-, and 5-grams, preserving punctuation and morphology;
+- sentence/regex construction features, including fronted conditions, `zodat`
+  tails, paired en-dash asides, semicolon links, and the explicit negative
+  contrast/listing definitions;
 - POS bi- and trigrams;
 - dependency direction, dependency-length bins, and dependency-depth bins.
+
+The construction family does not require a POS/dependency model. It uses
+sentence boundaries and transparent regular expressions, so it is available in
+`--no-syntax` runs. POS n-grams and dependency features remain model-dependent.
 
 Sentence-length and general rhythm distributions stay outside this module when Etincel already measures them.
 
@@ -58,7 +66,9 @@ No single threshold promotes a feature to a style rule. Start broad, inspect the
 
 ## Read concordances before naming a pattern
 
-For each strong feature, inspect examples from both sides. Character n-grams and POS/dependency features are discovery signals, not self-explanatory rules.
+For each strong feature, inspect examples from both sides. Character n-grams,
+regex constructions, and POS/dependency features are discovery signals, not
+self-explanatory rules.
 
 Translate evidence in this order:
 
