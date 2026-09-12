@@ -37,6 +37,12 @@ class Pair:
     b: str
 
 
+@dataclass(frozen=True)
+class TextRecord:
+    text_id: str
+    text: str
+
+
 @dataclass
 class Extracted:
     counts: dict[str, Counter[str]]
@@ -60,11 +66,7 @@ def load_nlp(model: str):
 
 
 def load_pairs(path: Path, a_field: str, b_field: str, id_field: str) -> list[Pair]:
-    if path.suffix.lower() == ".jsonl":
-        records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
-    else:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        records = payload if isinstance(payload, list) else payload.get("pairs", [])
+    records = read_records(path, "pairs")
     pairs: list[Pair] = []
     for i, record in enumerate(records):
         if not isinstance(record, Mapping):
@@ -80,8 +82,44 @@ def load_pairs(path: Path, a_field: str, b_field: str, id_field: str) -> list[Pa
     return pairs
 
 
+def read_records(path: Path, object_key: str) -> list[Any]:
+    if path.suffix.lower() == ".jsonl":
+        return [
+            json.loads(line)
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(payload, list):
+        return payload
+    if isinstance(payload, Mapping):
+        records = payload.get(object_key, [])
+        return records if isinstance(records, list) else []
+    return []
+
+
+def load_texts(path: Path, text_field: str, id_field: str) -> list[TextRecord]:
+    records = read_records(path, "texts")
+    texts: list[TextRecord] = []
+    for i, record in enumerate(records):
+        if not isinstance(record, Mapping):
+            raise ValueError(f"Record {i} is not an object")
+        text = str(record.get(text_field, "")).strip()
+        if not text:
+            continue
+        text_id = str(record.get(id_field) or f"text-{i + 1:04d}")
+        texts.append(TextRecord(text_id=text_id, text=text))
+    if not texts:
+        raise ValueError("No complete text records found")
+    return texts
+
+
+def surface_text(text: str) -> str:
+    return SPACE_RE.sub(" ", text.strip())
+
+
 def normalize_text(text: str) -> str:
-    return SPACE_RE.sub(" ", text.strip()).casefold()
+    return surface_text(text).casefold()
 
 
 def simple_tokens(text: str) -> list[str]:
@@ -139,7 +177,7 @@ def add_fallback_function_words(counts: dict[str, Counter[str]], raw_tokens: Seq
 
 def extract(text: str, nlp: Any | None, include_syntax: bool = True) -> Extracted:
     counts: dict[str, Counter[str]] = defaultdict(Counter)
-    normalized = normalize_text(text)
+    normalized = surface_text(text)
     raw_tokens = simple_tokens(text)
     add_fallback_function_words(counts, raw_tokens)
 
@@ -316,6 +354,88 @@ def build_rows(
     return rows
 
 
+def descriptive_metric_summary(extracted: Sequence[Extracted]) -> dict[str, Any]:
+    metrics = sorted(set().union(*(e.metrics.keys() for e in extracted)))
+    result: dict[str, Any] = {}
+    for metric in metrics:
+        values = [e.metrics[metric] for e in extracted if metric in e.metrics]
+        if not values:
+            continue
+        result[metric] = {
+            "mean": statistics.fmean(values),
+            "median": statistics.median(values),
+            "min": min(values),
+            "max": max(values),
+            "documents": len(values),
+        }
+    return result
+
+
+def build_descriptive_profile(
+    records: Sequence[TextRecord],
+    extracted: Sequence[Extracted],
+    baseline: str,
+    min_count: int,
+) -> dict[str, Any]:
+    families = sorted(set().union(*(e.counts.keys() for e in extracted)))
+    rows: list[dict[str, Any]] = []
+    for family in families:
+        corpus = Counter()
+        for e in extracted:
+            corpus.update(e.counts.get(family, Counter()))
+        total = sum(corpus.values())
+        if not total:
+            continue
+        for feature, count in corpus.items():
+            if count < min_count:
+                continue
+            documents = sum(1 for e in extracted if e.counts.get(family, Counter())[feature] > 0)
+            rows.append(
+                {
+                    "family": family,
+                    "feature": feature,
+                    "count": count,
+                    "total": total,
+                    "per_10k": count / total * 10000,
+                    "document_dispersion": documents / len(records) if records else 0.0,
+                    "documents_present": documents,
+                    "baseline_literal_match": literal_baseline_match(feature, family, baseline),
+                }
+            )
+    return {
+        "mode": "descriptive",
+        "record_count": len(records),
+        "corpus_stats": {
+            "tokens": sum(len(simple_tokens(record.text)) for record in records),
+            "characters": sum(len(surface_text(record.text)) for record in records),
+        },
+        "structural_metrics": descriptive_metric_summary(extracted),
+        "filters": {"min_count": min_count},
+        "features": sorted(rows, key=lambda r: (r["count"], r["document_dispersion"]), reverse=True),
+    }
+
+
+def add_descriptive_concordances(
+    rows: list[dict[str, Any]],
+    records: Sequence[TextRecord],
+    nlp: Any | None,
+    limit_rows: int,
+    examples_per_corpus: int,
+) -> None:
+    ranked = sorted(rows, key=lambda r: (r["count"], r["document_dispersion"]), reverse=True)[:limit_rows]
+    for row in ranked:
+        examples: list[dict[str, str]] = []
+        for record in records:
+            if len(examples) >= examples_per_corpus:
+                break
+            snippet = surface_concordance(record.text, row["feature"], row["family"])
+            snippet = snippet or syntax_concordance(record.text, row["feature"], row["family"], nlp)
+            if snippet:
+                examples.append({"text_id": record.text_id, "text": snippet})
+        if examples:
+            row["concordances"] = examples
+
+
 def metric_summary(extracted_a: Sequence[Extracted], extracted_b: Sequence[Extracted]) -> dict[str, Any]:
     metrics = sorted(set().union(*(e.metrics.keys() for e in extracted_a), *(e.metrics.keys() for e in extracted_b)))
     result: dict[str, Any] = {}
@@ -342,15 +462,20 @@ def metric_summary(extracted_a: Sequence[Extracted], extracted_b: Sequence[Extra
 
 
 def surface_concordance(text: str, feature: str, family: str, width: int = 90) -> str | None:
-    target = feature.strip()
-    if not target or family.startswith("pos_") or family.startswith("dep_"):
+    if not feature.strip() or family.startswith("pos_") or family.startswith("dep_"):
         return None
-    haystack = normalize_text(text)
+    target = feature.strip() if family.startswith("function_word") else feature
+    haystack = surface_text(text)
     if family.startswith("function_word"):
-        match = re.search(r"(?<!\w)" + re.escape(target.casefold()) + r"(?!\w)", haystack)
+        match = re.search(
+            r"(?<!\w)" + re.escape(target) + r"(?!\w)",
+            haystack,
+            flags=re.IGNORECASE,
+        )
         idx = match.start() if match else -1
     else:
-        idx = haystack.find(target.casefold())
+        match = re.search(re.escape(target), haystack, flags=re.IGNORECASE)
+        idx = match.start() if match else -1
     if idx < 0:
         return None
     start = max(0, idx - width)
@@ -431,6 +556,65 @@ def select_rows(
     ]
 
 
+def render_descriptive_markdown(
+    payload: Mapping[str, Any],
+    rows: Sequence[dict[str, Any]],
+    top_per_family: int,
+) -> str:
+    lines = [
+        "# Descriptive style profile",
+        "",
+        f"Texts: **{payload['record_count']}**; tokens: **{payload['corpus_stats']['tokens']}**.",
+        "",
+        "No reference corpus is used here. Log Ratio and G² are therefore not computed; this report describes the candidate corpus only.",
+        "",
+        "## Structural metrics",
+        "",
+        "| Metric | Mean | Median | Min | Max | Documents |",
+        "|---|---:|---:|---:|---:|---:|",
+    ]
+    for metric, stats in payload.get("structural_metrics", {}).items():
+        lines.append(
+            f"| `{metric}` | {stats['mean']:.4f} | {stats['median']:.4f} | "
+            f"{stats['min']:.4f} | {stats['max']:.4f} | {stats['documents']} |"
+        )
+    if not payload.get("structural_metrics"):
+        lines.append("| _No syntax model used_ |  |  |  |  |  |")
+
+    by_family: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        by_family[row["family"]].append(row)
+    for family in sorted(by_family):
+        lines += [
+            "",
+            f"## {family}",
+            "",
+            "| Feature | Count | Per 10k within family | Documents | Dispersion | Baseline literal |",
+            "|---|---:|---:|---:|---:|---|",
+        ]
+        ranked = sorted(
+            by_family[family],
+            key=lambda r: (r["count"], r["document_dispersion"]),
+            reverse=True,
+        )[:top_per_family]
+        for row in ranked:
+            feature = str(row["feature"]).replace("|", "\\|")
+            lines.append(
+                f"| `{feature}` | {row['count']} | {row['per_10k']:.1f} | "
+                f"{row['documents_present']} | {row['document_dispersion']:.1%} | "
+                f"{'yes' if row['baseline_literal_match'] else 'no'} |"
+            )
+
+    evidence_rows = [r for r in rows if r.get("concordances")]
+    if evidence_rows:
+        lines += ["", "## Concordance packets"]
+        for row in sorted(evidence_rows, key=lambda r: r["count"], reverse=True):
+            lines += ["", f"### `{row['family']} :: {row['feature']}`", ""]
+            for example in row["concordances"]:
+                lines.append(f"- `{example['text_id']}` — {example['text']}")
+    return "\n".join(lines) + "\n"
+
+
 def render_markdown(
     payload: Mapping[str, Any],
     rows: Sequence[dict[str, Any]],
@@ -500,11 +684,19 @@ def render_markdown(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Discover paired writing-style differences")
-    parser.add_argument("input", type=Path, help="JSON/JSONL with paired texts")
+    parser = argparse.ArgumentParser(description="Discover empirical writing-style patterns")
+    parser.add_argument("input", type=Path, help="JSON/JSONL with paired or standalone texts")
+    parser.add_argument(
+        "--mode",
+        choices=("paired", "descriptive"),
+        default="paired",
+        help="paired keyness (default) or a descriptive profile for one corpus",
+    )
     parser.add_argument("--a-field", default="draft")
     parser.add_argument("--b-field", default="final")
     parser.add_argument("--id-field", default="pair_id")
+    parser.add_argument("--text-field", default="text")
+    parser.add_argument("--text-id-field", default="id")
     parser.add_argument("--a-label", default="LLM draft")
     parser.add_argument("--b-label", default="final text")
     parser.add_argument("--spacy-model", default="nl_core_news_sm")
@@ -525,6 +717,38 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    if args.mode == "descriptive":
+        records = load_texts(args.input, args.text_field, args.text_id_field)
+        nlp = None if args.no_syntax else load_nlp(args.spacy_model)
+        extracted = [extract(record.text, nlp, include_syntax=not args.no_syntax) for record in records]
+        baseline = read_baseline(args.known)
+        payload = build_descriptive_profile(records, extracted, baseline, args.min_count)
+        payload.update(
+            {
+                "input": str(args.input),
+                "spacy_model": None if args.no_syntax else args.spacy_model,
+            }
+        )
+        if not args.no_concordance:
+            add_descriptive_concordances(
+                payload["features"],
+                records,
+                nlp,
+                args.concordance_rows,
+                args.examples_per_side,
+            )
+        args.out_dir.mkdir(parents=True, exist_ok=True)
+        (args.out_dir / "style-discovery.json").write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        (args.out_dir / "style-discovery.md").write_text(
+            render_descriptive_markdown(payload, payload["features"], args.top_per_family),
+            encoding="utf-8",
+        )
+        print(f"Wrote {args.out_dir / 'style-discovery.json'}")
+        print(f"Wrote {args.out_dir / 'style-discovery.md'}")
+        return 0
+
     pairs = load_pairs(args.input, args.a_field, args.b_field, args.id_field)
     nlp = None if args.no_syntax else load_nlp(args.spacy_model)
     extracted_a = [extract(pair.a, nlp, include_syntax=not args.no_syntax) for pair in pairs]

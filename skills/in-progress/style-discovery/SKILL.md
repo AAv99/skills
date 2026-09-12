@@ -7,6 +7,18 @@ description: Discover empirical writing-style differences from paired drafts and
 
 Use this skill to find candidate style patterns. Do not use it as a generic quality score, authorship detector, or automatic rule generator.
 
+## One-corpus descriptive mode
+
+When only one candidate corpus is available, run the script with
+`--mode descriptive`. This mode is a descriptive profile, not a keyness test:
+it reports feature counts, relative frequencies, document dispersion, and
+syntax metrics when available. Relative frequencies are within feature family.
+It deliberately emits no Log Ratio or G².
+
+Do not call the single-corpus output a comparison, reference result, or
+keyness finding. A valid second corpus is required before Log Ratio and G² can
+be used.
+
 ## Start from matched texts
 
 Prefer pairs that express the same communicative task: an LLM draft and the final sent version of that message. This controls topic, recipient, dossier, and register far better than comparing unrelated corpora.

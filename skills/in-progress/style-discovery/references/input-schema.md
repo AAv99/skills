@@ -1,4 +1,32 @@
-# Paired corpus input
+# Input modes
+
+The default mode is `paired`. It is the only mode that compares two versions
+of the same communicative task and computes Log Ratio, G², dispersion across
+pairs, and direction consistency.
+
+For one candidate corpus without a valid reference corpus, use the explicit
+`descriptive` mode. It reports feature counts, within-family relative
+frequencies, document dispersion, and syntax metrics when a syntax model is
+available. It does not compute Log Ratio or G² and must not be interpreted as
+keyness.
+
+```bash
+python skills/in-progress/style-discovery/scripts/style_discovery.py \
+  /private/texts.json --mode descriptive --text-field text --text-id-field id \
+  --no-syntax --out-dir /private/descriptive-output
+```
+
+The input records for descriptive mode contain one text per object:
+
+```json
+{"id":"mail-001","text":"One complete text..."}
+```
+
+The loader does not normalize the stored input. It trims only outer transport
+whitespace; the derived feature extraction keeps punctuation and casing in
+character n-grams and keeps morphology in the surface text.
+
+## Paired corpus input
 
 Use JSONL when possible. One line is one communicative task with both versions of the text.
 
