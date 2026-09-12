@@ -1,14 +1,15 @@
 import importlib.util
 import json
-import math
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 MODULE_PATH = Path(__file__).parents[1] / "scripts" / "style_discovery.py"
 spec = importlib.util.spec_from_file_location("style_discovery", MODULE_PATH)
-module = importlib.util.module_from_spec(spec)
 assert spec and spec.loader
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
 spec.loader.exec_module(module)
 
 
