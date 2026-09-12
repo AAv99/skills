@@ -1,0 +1,69 @@
+import importlib.util
+import json
+import math
+import tempfile
+import unittest
+from pathlib import Path
+
+MODULE_PATH = Path(__file__).parents[1] / "scripts" / "style_discovery.py"
+spec = importlib.util.spec_from_file_location("style_discovery", MODULE_PATH)
+module = importlib.util.module_from_spec(spec)
+assert spec and spec.loader
+spec.loader.exec_module(module)
+
+
+class StyleDiscoveryTests(unittest.TestCase):
+    def test_log_ratio_direction(self):
+        self.assertGreater(module.log_ratio(20, 100, 5, 100), 0)
+        self.assertLess(module.log_ratio(5, 100, 20, 100), 0)
+
+    def test_g2_equal_rates_is_zero(self):
+        self.assertAlmostEqual(module.g2(10, 100, 20, 200), 0.0, places=10)
+
+    def test_g2_detects_large_difference(self):
+        self.assertGreater(module.g2(40, 100, 5, 100), 20)
+
+    def test_lexical_extraction_keeps_function_words_and_char_ngrams(self):
+        result = module.extract("Dit is een korte zin, maar hij is helder.", None, include_syntax=False)
+        self.assertGreater(result.counts["function_word"]["dit"], 0)
+        self.assertGreater(result.counts["function_word"]["maar"], 0)
+        self.assertIn("dit", result.counts["char_3gram"])
+        self.assertEqual(result.metrics, {})
+
+    def test_load_pairs_skips_incomplete_records(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "pairs.jsonl"
+            path.write_text(
+                "\n".join(
+                    [
+                        json.dumps({"pair_id": "1", "draft": "A", "final": "B"}),
+                        json.dumps({"pair_id": "2", "draft": "", "final": "B"}),
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            pairs = module.load_pairs(path, "draft", "final", "pair_id")
+            self.assertEqual(len(pairs), 1)
+            self.assertEqual(pairs[0].pair_id, "1")
+
+    def test_pair_evidence_rewards_repeated_direction(self):
+        pairs = [module.Pair("1", "", ""), module.Pair("2", "", "")]
+        ea = [
+            module.Extracted({"function_word": module.Counter({"maar": 4, "de": 6})}, {}),
+            module.Extracted({"function_word": module.Counter({"maar": 3, "de": 7})}, {}),
+        ]
+        eb = [
+            module.Extracted({"function_word": module.Counter({"maar": 1, "de": 9})}, {}),
+            module.Extracted({"function_word": module.Counter({"maar": 1, "de": 9})}, {}),
+        ]
+        dispersion, consistency, observed, informative = module.pair_evidence(
+            "maar", "function_word", pairs, ea, eb, 1
+        )
+        self.assertEqual(dispersion, 1.0)
+        self.assertEqual(consistency, 1.0)
+        self.assertEqual(observed, 2)
+        self.assertEqual(informative, 2)
+
+
+if __name__ == "__main__":
+    unittest.main()
