@@ -128,15 +128,20 @@ def token_depth(token: Any) -> int:
     return depth
 
 
+def add_fallback_function_words(counts: dict[str, Counter[str]], raw_tokens: Sequence[str]) -> None:
+    counts["function_word"].update(t for t in raw_tokens if t in DUTCH_FUNCTION_WORDS)
+    for n in (2, 3):
+        family = f"function_word_{n}gram"
+        for window in ngrams(raw_tokens, n):
+            if all(token in DUTCH_FUNCTION_WORDS for token in window):
+                counts[family][" ".join(window)] += 1
+
+
 def extract(text: str, nlp: Any | None, include_syntax: bool = True) -> Extracted:
     counts: dict[str, Counter[str]] = defaultdict(Counter)
     normalized = normalize_text(text)
     raw_tokens = simple_tokens(text)
-
-    fallback_fw = [t for t in raw_tokens if t in DUTCH_FUNCTION_WORDS]
-    counts["function_word"].update(fallback_fw)
-    for n in (2, 3):
-        counts[f"function_word_{n}gram"].update(" ".join(g) for g in ngrams(fallback_fw, n))
+    add_fallback_function_words(counts, raw_tokens)
 
     for n in (3, 4, 5):
         family = f"char_{n}gram"
@@ -154,12 +159,13 @@ def extract(text: str, nlp: Any | None, include_syntax: bool = True) -> Extracte
 
     doc = nlp(text)
     tokens = [t for t in doc if not t.is_space]
-    function_flags = [t.pos_ in FUNCTION_POS and not t.is_punct for t in tokens]
-    function_surface = [t.text.casefold() for t, is_fw in zip(tokens, function_flags) if is_fw]
-    counts["function_word"] = Counter(function_surface)
+    counts["function_word"] = Counter(
+        t.text.casefold() for t in tokens if t.pos_ in FUNCTION_POS and not t.is_punct
+    )
 
     for n in (2, 3):
         family = f"function_word_{n}gram"
+        counts[family] = Counter()
         for i in range(len(tokens) - n + 1):
             window = tokens[i : i + n]
             if all(t.pos_ in FUNCTION_POS and not t.is_punct for t in window):
@@ -253,8 +259,6 @@ def literal_baseline_match(feature: str, family: str, baseline: str) -> bool:
     if family.startswith("function_word"):
         pattern = r"(?<!\w)" + re.escape(feature.casefold()) + r"(?!\w)"
         return re.search(pattern, baseline) is not None
-    if family.startswith("char_") and len(feature.strip()) >= 5:
-        return feature.casefold() in baseline
     return f"{family}:{feature}".casefold() in baseline
 
 
@@ -298,6 +302,8 @@ def build_rows(
                     "b_count": b,
                     "a_total": n_a,
                     "b_total": n_b,
+                    "a_per_10k": a / n_a * 10000,
+                    "b_per_10k": b / n_b * 10000,
                     "log_ratio": lr,
                     "g2": g2(a, n_a, b, n_b),
                     "dispersion": dispersion,
@@ -340,7 +346,11 @@ def surface_concordance(text: str, feature: str, family: str, width: int = 90) -
     if not target or family.startswith("pos_") or family.startswith("dep_"):
         return None
     haystack = normalize_text(text)
-    idx = haystack.find(target.casefold())
+    if family.startswith("function_word"):
+        match = re.search(r"(?<!\w)" + re.escape(target.casefold()) + r"(?!\w)", haystack)
+        idx = match.start() if match else -1
+    else:
+        idx = haystack.find(target.casefold())
     if idx < 0:
         return None
     start = max(0, idx - width)
@@ -456,7 +466,7 @@ def render_markdown(
             "",
             f"## {family}",
             "",
-            "| Direction | Feature | A | B | Log Ratio | G² | Dispersion | Consistency | Baseline literal |",
+            "| Direction | Feature | A/10k | B/10k | Log Ratio | G² | Dispersion | Consistency | Baseline literal |",
             "|---|---|---:|---:|---:|---:|---:|---:|---|",
         ]
         ranked = sorted(by_family[family], key=lambda r: (r["g2"], abs(r["log_ratio"])), reverse=True)[:top_per_family]
@@ -464,7 +474,7 @@ def render_markdown(
             direction = a_label if row["log_ratio"] > 0 else b_label
             feature = str(row["feature"]).replace("|", "\\|")
             lines.append(
-                f"| {direction} | `{feature}` | {row['a_count']} | {row['b_count']} | "
+                f"| {direction} | `{feature}` | {row['a_per_10k']:.1f} | {row['b_per_10k']:.1f} | "
                 f"{row['log_ratio']:.3f} | {row['g2']:.2f} | {row['dispersion']:.1%} | "
                 f"{row['direction_consistency']:.1%} | {'yes' if row['baseline_literal_match'] else 'no'} |"
             )
