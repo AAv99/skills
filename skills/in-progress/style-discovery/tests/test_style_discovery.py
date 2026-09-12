@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -64,6 +65,43 @@ class StyleDiscoveryTests(unittest.TestCase):
         self.assertEqual(consistency, 1.0)
         self.assertEqual(observed, 2)
         self.assertEqual(informative, 2)
+
+    def test_cli_writes_json_and_markdown(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            corpus = root / "pairs.jsonl"
+            corpus.write_text(
+                "\n".join(
+                    [
+                        json.dumps({"pair_id": "1", "draft": "Maar dit is echter wel zo.", "final": "Dit is zo."}),
+                        json.dumps({"pair_id": "2", "draft": "Maar wij doen dit ook.", "final": "Wij doen dit."}),
+                        json.dumps({"pair_id": "3", "draft": "Maar dat is ook helder.", "final": "Dat is helder."}),
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            out = root / "out"
+            run = subprocess.run(
+                [
+                    sys.executable,
+                    str(MODULE_PATH),
+                    str(corpus),
+                    "--no-syntax",
+                    "--min-count",
+                    "1",
+                    "--out-dir",
+                    str(out),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.assertTrue((out / "style-discovery.json").exists())
+            self.assertTrue((out / "style-discovery.md").exists())
+            payload = json.loads((out / "style-discovery.json").read_text(encoding="utf-8"))
+            self.assertEqual(payload["pair_count"], 3)
+            self.assertTrue(payload["features"])
 
 
 if __name__ == "__main__":
