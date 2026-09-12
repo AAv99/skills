@@ -15,6 +15,12 @@ A pair must represent the same intended message. Do not pair texts merely becaus
 
 If several LLM drafts preceded one final mail, either select the last draft before human editing or create a separate experiment for revision stages. Do not count one final message repeatedly in the same primary comparison.
 
+## Compare message bodies, not mail-client artifacts
+
+Before pairing, remove quoted reply history, automatic signatures, tracking footers, legal disclaimers, MIME/HTML residue, and other material that was not part of the writing decision under study. Apply the same normalization rule to both sides.
+
+Do not aggressively clean punctuation, casing, spacing, or morphology. Character n-grams deliberately need those signals. Normalize only artifacts introduced by the transport or export layer.
+
 ## Corpus boundaries
 
 Keep materially different genres separate when possible. External client email, internal colleague email, formal tax-authority correspondence, and marketing copy may have different style systems.
