@@ -1,0 +1,26 @@
+name: Style discovery tests
+
+on:
+  push:
+    branches:
+      - feat/style-discovery-keyness
+    paths:
+      - 'skills/in-progress/style-discovery/**'
+      - '.github/workflows/style-discovery-tests.yml'
+  pull_request:
+    paths:
+      - 'skills/in-progress/style-discovery/**'
+      - '.github/workflows/style-discovery-tests.yml'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile engine
+        run: python -m py_compile skills/in-progress/style-discovery/scripts/style_discovery.py
+      - name: Run unit tests
+        run: python -m unittest discover -s skills/in-progress/style-discovery/tests -v
