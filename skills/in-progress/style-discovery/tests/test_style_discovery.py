@@ -41,6 +41,13 @@ class StyleDiscoveryTests(unittest.TestCase):
         self.assertEqual(result.counts["construct"]["negative_contrast"], 1)
         self.assertEqual(result.counts["construct"]["condition_fronted"], 1)
 
+    def test_construct_concordance_returns_the_matching_sentence(self):
+        snippet = module.construct_concordance(
+            "Indien nodig, dan nemen wij contact op. Dit is de vervolgstap.",
+            "condition_fronted",
+        )
+        self.assertEqual(snippet, "Indien nodig, dan nemen wij contact op.")
+
     def test_load_unpaired_records_preserves_text_and_skips_empty_records(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "texts.json"

@@ -508,8 +508,13 @@ def add_descriptive_concordances(
         for record in records:
             if len(examples) >= examples_per_corpus:
                 break
-            snippet = surface_concordance(record.text, row["feature"], row["family"])
-            snippet = snippet or syntax_concordance(record.text, row["feature"], row["family"], nlp)
+            if row["family"] == "construct":
+                snippet = construct_concordance(record.text, row["feature"])
+            else:
+                snippet = surface_concordance(record.text, row["feature"], row["family"])
+                snippet = snippet or syntax_concordance(
+                    record.text, row["feature"], row["family"], nlp
+                )
             if snippet:
                 examples.append({"text_id": record.text_id, "text": snippet})
         if examples:
@@ -542,7 +547,12 @@ def metric_summary(extracted_a: Sequence[Extracted], extracted_b: Sequence[Extra
 
 
 def surface_concordance(text: str, feature: str, family: str, width: int = 90) -> str | None:
-    if not feature.strip() or family.startswith("pos_") or family.startswith("dep_"):
+    if (
+        not feature.strip()
+        or family == "construct"
+        or family.startswith("pos_")
+        or family.startswith("dep_")
+    ):
         return None
     target = feature.strip() if family.startswith("function_word") else feature
     haystack = surface_text(text)
@@ -561,6 +571,24 @@ def surface_concordance(text: str, feature: str, family: str, width: int = 90) -
     start = max(0, idx - width)
     end = min(len(haystack), idx + len(target) + width)
     return haystack[start:end]
+
+
+def construct_concordance(text: str, feature: str) -> str | None:
+    pattern = _CONSTRUCT_PATTERNS.get(feature)
+    sentences = sentence_segments(text)
+    if pattern:
+        for sentence in sentences:
+            if pattern.search(sentence):
+                return sentence
+    if feature == "negative_listing":
+        for first, second, third in zip(sentences, sentences[1:], sentences[2:]):
+            if (
+                NEGATION_START_RE.search(first)
+                and NEGATION_START_RE.search(second)
+                and not NEGATION_START_RE.search(third)
+            ):
+                return " ".join((first, second, third))
+    return None
 
 
 def syntax_concordance(text: str, feature: str, family: str, nlp: Any | None) -> str | None:
@@ -604,7 +632,12 @@ def add_concordances(
             for side, text in (("a", pair.a), ("b", pair.b)):
                 if len(examples[side]) >= examples_per_side:
                     continue
-                snippet = surface_concordance(text, feature, family) or syntax_concordance(text, feature, family, nlp)
+                if family == "construct":
+                    snippet = construct_concordance(text, feature)
+                else:
+                    snippet = surface_concordance(text, feature, family) or syntax_concordance(
+                        text, feature, family, nlp
+                    )
                 if snippet:
                     examples[side].append({"pair_id": pair.pair_id, "text": snippet})
             if all(len(examples[s]) >= examples_per_side for s in ("a", "b")):
