@@ -41,6 +41,20 @@ class StyleDiscoveryTests(unittest.TestCase):
         self.assertEqual(result.counts["construct"]["negative_contrast"], 1)
         self.assertEqual(result.counts["construct"]["condition_fronted"], 1)
 
+    def test_negative_construct_positive_controls_cover_supported_forms(self):
+        text = (
+            "Het gaat niet om de inhoud, maar om de vorm. "
+            "Geen van beide opties is doorslaggevend, maar de context wel. "
+            "Het gaat niet zozeer om snelheid als wel om zorgvuldigheid. "
+            "Niet de timing is doorslaggevend. Geen van beide opties werkt. "
+            "De procedure moet worden aangepast."
+        )
+        result = module.extract(text, None, include_syntax=False)
+        self.assertEqual(result.counts["construct"]["negative_contrast"], 3)
+        self.assertEqual(result.counts["construct"]["negative_listing"], 1)
+        self.assertIsNotNone(module.construct_concordance(text, "negative_contrast"))
+        self.assertIsNotNone(module.construct_concordance(text, "negative_listing"))
+
     def test_construct_concordance_returns_the_matching_sentence(self):
         snippet = module.construct_concordance(
             "Indien nodig, dan nemen wij contact op. Dit is de vervolgstap.",
